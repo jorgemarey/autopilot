@@ -39,11 +39,22 @@ func getServerInfo(zoneTag, upgradeTag string, m serf.Member, serverFn func(m se
 	return si, nil
 }
 
+type upgradeInfo struct {
+	highVersion   version.Version
+	higherServers []*serverInfo // servers that are not voters (filtered by the provided raft array)
+	higherVoters  []*serverInfo
+	lowerVoters   []*serverInfo
+	canUpgrade    bool
+	duringUpgrade bool
+	upgraded      bool
+}
+
 // This receives the array of possible new promotions, and the map split by version containing
 // information about all the servers.
 // Returns the high version servers of those possible, the low verion currently voting, and
 // three booleans meaning: canUpgrade, duringUpgrade and upgraded
-func getUpgradeInfo(servers []raft.Server, versions map[string][]*serverInfo, info map[raft.ServerID]*serverInfo) ([]*serverInfo, []*serverInfo, bool, bool, bool) {
+func getUpgradeInfo(servers []raft.Server, versions map[string][]*serverInfo, info map[raft.ServerID]*serverInfo,
+	checkZone bool, peers int) *upgradeInfo {
 	higher := version.Must(version.NewVersion(baseVersion))
 	var higherServers []*serverInfo
 	var lowerServers []*serverInfo
@@ -72,34 +83,66 @@ func getUpgradeInfo(servers []raft.Server, versions map[string][]*serverInfo, in
 			higherVoters = append(higherVoters, server)
 		}
 	}
-	higherVoter := (lowerVoters != nil && len(lowerVoters) > 0)
-	higherServers = make([]*serverInfo, 0)
+	higherServers = make([]*serverInfo, 0) // this filters the servers with those possible to promote
+	usefulHighServers := 0
+	zones := make(map[string]struct{})
 	for _, server := range servers {
-		if sinfo, ok := info[server.ID]; ok {
+		if sinfo, ok := info[server.ID]; ok && sinfo.Build.Equal(higher) {
 			higherServers = append(higherServers, sinfo)
+			if _, ok := zones[sinfo.Zone]; !checkZone || (checkZone && (!ok || sinfo.Zone == "")) {
+				usefulHighServers++
+				zones[sinfo.Zone] = struct{}{}
+			}
 		}
 	}
-	canUpgrade := len(higherServers)+len(higherVoters) >= len(lowerVoters)
+	if peers%2 == 0 {
+		usefulHighServers++
+	}
+	canUpgrade := usefulHighServers >= len(lowerVoters)
 	upgraded := !(lowerVoters != nil && len(lowerVoters) > 0)
-	return higherServers, lowerVoters, canUpgrade, (!upgraded) && higherVoter, upgraded
+	return &upgradeInfo{
+		highVersion:   *higher,
+		higherVoters:  higherVoters,
+		higherServers: higherServers,
+		lowerVoters:   lowerVoters,
+		canUpgrade:    canUpgrade,
+		duringUpgrade: (!upgraded) && (higherVoters != nil && len(higherVoters) > 0),
+		upgraded:      upgraded,
+	}
 }
 
-func makeInfoMaps(info map[raft.ServerID]*serverInfo) (map[string][]*serverInfo, map[string][]*serverInfo) {
-	zones := make(map[string][]*serverInfo)
+// this picks one of the highers servers
+func pickNewServer(servers []raft.Server, info map[raft.ServerID]*serverInfo, voters []*serverInfo, version version.Version, checkZone bool) []raft.Server {
+	zones := make(map[string]struct{})
+	for _, server := range voters {
+		zones[server.Zone] = struct{}{}
+	}
+	for _, server := range servers {
+		if sinfo, ok := info[server.ID]; ok && sinfo.Build.Equal(&version) {
+			if _, ok := zones[sinfo.Zone]; !checkZone || (checkZone && (!ok || sinfo.Zone == "")) {
+				return []raft.Server{server}
+			}
+		}
+	}
+	return nil
+}
+
+// THINK: leave the leader to the end
+func pickServerToDemote(voters []*serverInfo, info map[raft.ServerID]*serverInfo, checkZone bool) raft.ServerID {
+	return raft.ServerID(voters[0].ID)
+}
+
+func getVersions(info map[raft.ServerID]*serverInfo) map[string][]*serverInfo {
 	versions := make(map[string][]*serverInfo)
 	for _, server := range info {
-		zone, ok := zones[server.Zone]
-		if !ok {
-			zone = make([]*serverInfo, 0)
+		if server.Voting { // we only take into account voting servers
+			build := server.Build.String()
+			version, ok := versions[build]
+			if !ok {
+				version = make([]*serverInfo, 0)
+			}
+			versions[build] = append(version, server)
 		}
-		zones[server.Zone] = append(zone, server)
-
-		build := server.Build.String()
-		version, ok := versions[build]
-		if !ok {
-			version = make([]*serverInfo, 0)
-		}
-		versions[build] = append(version, server)
 	}
-	return zones, versions
+	return versions
 }

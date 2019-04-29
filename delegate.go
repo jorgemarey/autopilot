@@ -42,12 +42,11 @@ func (d *AdvancedAutopilotDelegate) PromoteNonVoters(conf *autopilot.Config, hea
 	info := d.buildServerInfo(conf, servers)
 	peers := autopilot.NumPeers(future.Configuration())
 	promoted, serverID := PromoteServers(conf, stable, info, peers)
-	if serverID != nil {
+	if serverID != nil { // if we need to demote a server do it now
 		futureErr := d.Raft().DemoteVoter(*serverID, 0, 0)
 		if err := futureErr.Error(); err != nil {
 			return nil, fmt.Errorf("error demoting server %s: %s", "", err)
 		}
-		return nil, nil
 	}
 	return promoted, nil
 }
