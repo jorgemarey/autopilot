@@ -1,8 +1,6 @@
 package autopilot
 
 import (
-	"fmt"
-
 	"github.com/hashicorp/consul/agent/consul/autopilot"
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/serf/serf"
@@ -50,17 +48,16 @@ func filterNonVoting(servers []raft.Server, info map[raft.ServerID]*serverInfo) 
 // cluster status. Also returns if we can continue or we should stop
 func filterByVersion(config *autopilot.Config, servers []raft.Server, info map[raft.ServerID]*serverInfo, peers int) ([]raft.Server, *raft.ServerID, bool) {
 	versions := getVersions(info)
-	checkZone := config.RedundancyZoneTag != ""
 	switch len(versions) {
 	case 1: // nothing to do
 		return nil, nil, true
 	case 2:
+		checkZone := config.RedundancyZoneTag != ""
 		upgradeInfo := getUpgradeInfo(servers, versions, info, checkZone, peers)
 		if upgradeInfo.upgraded {
 			return nil, nil, false
 		}
 		if upgradeInfo.canUpgrade {
-			fmt.Println(upgradeInfo.duringUpgrade, peers%2)
 			if upgradeInfo.duringUpgrade && peers%2 == 0 {
 				id := pickServerToDemote(upgradeInfo.lowerVoters, info, checkZone)
 				return nil, &id, false
