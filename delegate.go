@@ -56,7 +56,7 @@ func (d *AdvancedAutopilotDelegate) buildServerInfo(conf *autopilot.Config, serv
 	info := make(map[raft.ServerID]*serverInfo)
 	temp := make(map[raft.ServerID]*serverInfo)
 
-	for _, m := range d.Serf().Members() { // get the info for every server
+	for _, m := range d.SerfLAN().Members() { // get the info for every server
 		server, err := getServerInfo(conf.RedundancyZoneTag, conf.UpgradeVersionTag, m, d.IsServer)
 		if err == nil && server != nil { // add servers found
 			temp[raft.ServerID(server.ID)] = server
