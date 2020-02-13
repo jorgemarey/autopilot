@@ -2,9 +2,9 @@ package autopilot
 
 import (
 	"fmt"
-	"log"
 
 	"github.com/hashicorp/consul/agent/consul/autopilot"
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/raft"
 )
 
@@ -12,12 +12,12 @@ import (
 // This can check zones, versions and non voting servers
 type AdvancedAutopilotDelegate struct {
 	autopilot.Delegate
-	logger *log.Logger
+	logger hclog.InterceptLogger
 }
 
 // New returns a new AutopilotDelegate using the provided and with improved promotion
 // features
-func New(logger *log.Logger, delegate autopilot.Delegate) *AdvancedAutopilotDelegate {
+func New(logger hclog.InterceptLogger, delegate autopilot.Delegate) *AdvancedAutopilotDelegate {
 	return &AdvancedAutopilotDelegate{
 		Delegate: delegate,
 		logger:   logger,
