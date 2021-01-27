@@ -3,6 +3,7 @@ package autopilot
 import (
 	"time"
 
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-version"
 	"github.com/hashicorp/raft"
 	ra "github.com/hashicorp/raft-autopilot"
@@ -11,7 +12,20 @@ import (
 const baseVersion = "v0.0.1"
 
 // ImprovedPromoter is a new version of the promoter with improved funcionality
-type ImprovedPromoter struct{}
+type ImprovedPromoter struct {
+	logger hclog.Logger
+}
+
+// New will create a new promoter
+func New(options ...Option) ra.Promoter {
+	p := &ImprovedPromoter{
+		logger: hclog.Default().Named("promoter"),
+	}
+	for _, opt := range options {
+		opt(p)
+	}
+	return p
+}
 
 // GetServerExt returns some object that should be stored in the Ext field of the Server
 // This value will not be used by the code in this repo but may be used by the other
@@ -24,12 +38,11 @@ func (p *ImprovedPromoter) GetServerExt(config *ra.Config, srvState *ra.ServerSt
 	if srvState.Server.Ext != nil {
 		ext = srvState.Server.Ext.(ExtraServerInfo)
 	}
+	ext.Zone = string(srvState.Server.ID)
 	if zoneTag := extraConfig.RedundancyZoneTag; zoneTag != "" {
-		zone := srvState.Server.Meta[zoneTag]
-		if zone == "" {
-			zone = string(srvState.Server.ID)
+		if zone := srvState.Server.Meta[zoneTag]; zone != "" {
+			ext.Zone = zone
 		}
-		ext.Zone = zone
 	}
 	ext.Version = srvState.Server.Version
 	if uTag := extraConfig.UpgradeVersionTag; uTag != "" {
@@ -39,6 +52,7 @@ func (p *ImprovedPromoter) GetServerExt(config *ra.Config, srvState *ra.ServerSt
 		}
 		ext.Version = version
 	}
+	p.logger.Debug("Server ext", "id", srvState.Server.ID, "version", ext.Version, "zone", ext.Zone, "nonvoter", ext.NonVoter)
 	return ext
 }
 
@@ -85,10 +99,26 @@ func (p *ImprovedPromoter) CalculatePromotionsAndDemotions(config *ra.Config, st
 		}
 	}
 
-	extraConfig := config.Ext.(ExtraConfig)
 	// return if nothing else to do
 	if len(ableServers) == 0 {
+		p.logger.Debug("No raft changes")
 		return ra.RaftChanges{}
+	}
+
+	extraConfig := config.Ext.(ExtraConfig)
+
+	// Check if we have to perform upgrade
+	if !extraConfig.DisableUpgradeMigration {
+		changes, canContinue := p.filterByVersion(config, state, ableServers)
+		if !canContinue {
+			p.logger.Debug("New changes to do", "promotions", changes.Promotions, "demotions", changes.Demotions, "leader", changes.Leader)
+			return changes
+		}
+	}
+
+	// Filter by zone
+	if extraConfig.RedundancyZoneTag != "" {
+		return p.filterByZone(config, state, ableServers)
 	}
 
 	// add these servers so if we don't change anything those need to be promoted
@@ -96,20 +126,7 @@ func (p *ImprovedPromoter) CalculatePromotionsAndDemotions(config *ra.Config, st
 	for id := range ableServers {
 		changes.Promotions = append(changes.Promotions, id)
 	}
-
-	// Check if we have to perform upgrade
-	if !extraConfig.DisableUpgradeMigration {
-		changes, canContinue := p.filterByVersion(config, state, ableServers)
-		if !canContinue {
-			return changes
-		}
-	}
-
-	// Filter by zone
-	if extraConfig.RedundancyZoneTag != "" {
-		changes = p.filterByZone(config, state, ableServers)
-	}
-
+	p.logger.Debug("New changes to do", "promotions", changes.Promotions, "demotions", changes.Demotions, "leader", changes.Leader)
 	return changes
 }
 
@@ -164,6 +181,7 @@ func (p *ImprovedPromoter) filterByZone(config *ra.Config, state *ra.State, filt
 			zoneVoter[zone] = struct{}{}
 		}
 	}
+	p.logger.Debug("New changes to do", "promotions", changes.Promotions, "demotions", changes.Demotions, "leader", changes.Leader)
 	return changes
 }
 
@@ -234,44 +252,4 @@ func (p *ImprovedPromoter) performVersionUpgrade(config *ra.Config, state *ra.St
 	}
 
 	return changes
-}
-
-func serverZone(srv ra.Server) string {
-	extra := srv.Ext.(ExtraServerInfo)
-	return extra.Zone
-}
-
-func getVersionInfo(config *ra.Config, state *ra.State) (map[string][]*ra.ServerState, *version.Version, *version.Version) {
-	versions := make(map[string][]*ra.ServerState)
-	var higher, lower *version.Version
-
-	now := time.Now()
-	minStableDuration := state.ServerStabilizationTime(config)
-	for _, srv := range state.Servers {
-		if srv.Health.IsStable(now, minStableDuration) {
-			extra := srv.Server.Ext.(ExtraServerInfo)
-			version, ok := versions[extra.Version]
-			if !ok {
-				version = make([]*ra.ServerState, 0)
-			}
-			versions[extra.Version] = append(version, srv)
-		}
-	}
-	first := true
-	for k := range versions {
-		v := version.Must(version.NewVersion(k))
-		if first {
-			higher = v
-			lower = v
-			first = false
-			continue
-		}
-		if v.GreaterThan(higher) {
-			higher = v
-		}
-		if v.LessThan(lower) {
-			lower = v
-		}
-	}
-	return versions, higher, lower
 }
