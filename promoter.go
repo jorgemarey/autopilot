@@ -99,12 +99,6 @@ func (p *ImprovedPromoter) CalculatePromotionsAndDemotions(config *ra.Config, st
 		}
 	}
 
-	// return if nothing else to do
-	if len(ableServers) == 0 {
-		p.logger.Debug("No raft changes")
-		return ra.RaftChanges{}
-	}
-
 	extraConfig := config.Ext.(ExtraConfig)
 
 	// Check if we have to perform upgrade
@@ -114,6 +108,12 @@ func (p *ImprovedPromoter) CalculatePromotionsAndDemotions(config *ra.Config, st
 			p.logger.Debug("New changes to do", "promotions", changes.Promotions, "demotions", changes.Demotions, "leader", changes.Leader)
 			return changes
 		}
+	}
+
+	// return if nothing else to do
+	if len(ableServers) == 0 {
+		p.logger.Debug("No raft changes")
+		return ra.RaftChanges{}
 	}
 
 	// Filter by zone
@@ -199,6 +199,8 @@ func (p *ImprovedPromoter) performVersionUpgrade(config *ra.Config, state *ra.St
 	serverInfo := leader.Server.Ext.(ExtraServerInfo)
 	highVersionLeader = version.Must(version.NewVersion(serverInfo.Version)).Equal(hv)
 
+	p.logger.Debug("Versions info", "highvoter", highVersionVoter, "lowvoter", lowVersionVoter, "highleader", highVersionLeader)
+
 	// if no voters with the low version exist we're upgraded
 	if !lowVersionVoter {
 		return changes
@@ -219,7 +221,7 @@ func (p *ImprovedPromoter) performVersionUpgrade(config *ra.Config, state *ra.St
 				zones[serverInfo.Zone] = struct{}{}
 			}
 		}
-		if len(usefulHighVersionServers) > len(state.Voters) {
+		if len(usefulHighVersionServers) >= len(state.Voters) {
 			for _, srv := range usefulHighVersionServers {
 				changes.Promotions = append(changes.Promotions, srv.ID)
 			}
